@@ -1,7 +1,6 @@
 import { db } from '../../lib/db.js';
 import 'dotenv/config';
-import SHA256 from 'crypto-js/sha256.js';
-import HmacSHA256 from 'crypto-js/hmac-sha256.js';
+import crypto from 'crypto';
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
@@ -9,11 +8,31 @@ export default async function handler(req, res) {
     return res.status(405).end(`Method ${req.method} Not Allowed`);
   }
 
-  const query = req.query;
-
-  if (!query.hash) {
-    return res.status(400).json({ error: 'Bad Request: No hash provided.' });
+  // --- NEW HASH VALIDATION (RAW VALUES) ---
+  // We use req.url to get the raw, encoded query string, as this might be
+  // how Telegram's servers build the hash string.
+  const queryString = req.url.split('?')[1];
+  if (!queryString) {
+    return res.status(400).json({ error: 'Bad Request: Query string is empty.' });
   }
+
+  const params = new URLSearchParams(queryString);
+  const receivedHash = params.get('hash');
+
+  if (!receivedHash) {
+    return res.status(400).json({ error: 'Bad Request: No hash provided in query.' });
+  }
+
+  const dataCheckArr = [];
+  for (const [key, value] of params.entries()) {
+    if (key !== 'hash') {
+      dataCheckArr.push(`${key}=${value}`);
+    }
+  }
+
+  // Sort the array of "key=value" strings alphabetically.
+  dataCheckArr.sort();
+  const dataCheckString = dataCheckArr.join('\n');
 
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   if (!botToken) {
@@ -21,27 +40,20 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Internal Server Error: Bot token not configured.' });
   }
 
+  const secretKey = crypto.createHash('sha256').update(botToken).digest();
+  const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+
+  if (calculatedHash !== receivedHash) {
+    console.error(`HASH MISMATCH (RAW). Calculated: ${calculatedHash}, Received: ${receivedHash}`);
+    console.error(`Data-check-string used: \n${dataCheckString}`);
+    return res.status(403).json({ error: 'Forbidden: Invalid hash (raw check failed).' });
+  }
+  // --- END OF HASH VALIDATION ---
+
+  // If the hash is valid, we can now safely use the decoded values from req.query
+  const { id: telegram_id, username, photo_url, auth_date, first_name } = req.query;
+
   try {
-    // --- HASH VALIDATION WITH crypto-js ---
-    const secretKey = SHA256(botToken);
-
-    const dataCheckString = Object.keys(query)
-      .filter(key => key !== 'hash')
-      .sort()
-      .map(key => `${key}=${query[key]}`)
-      .join('\n');
-
-    const hmac = HmacSHA256(dataCheckString, secretKey);
-    const calculatedHash = hmac.toString(); // Defaults to hex
-
-    if (calculatedHash !== query.hash) {
-      console.error(`HASH MISMATCH with crypto-js. Calculated: ${calculatedHash}, Received: ${query.hash}`);
-      return res.status(403).json({ error: 'Forbidden: Invalid hash (crypto-js).' });
-    }
-    // --- END OF HASH VALIDATION ---
-
-    const { id: telegram_id, username, photo_url, auth_date, first_name } = query;
-
     const userQuery = `
       INSERT INTO users (telegram_id, username, photo_url, auth_date)
       VALUES ($1, $2, $3, $4)
@@ -76,7 +88,7 @@ export default async function handler(req, res) {
     res.redirect(302, `${frontendUrl}?user=${encodedUser}`);
 
   } catch (error) {
-    console.error('Error during login:', error);
+    console.error('Error during login database operation:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 }
