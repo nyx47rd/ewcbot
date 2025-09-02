@@ -1,53 +1,57 @@
-import { db } from '../../../../../lib/db.js'; // Adjusted path for Next.js structure
+import { db } from '../../../../../lib/db.js';
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return res.status(405).end(`Method ${req.method} Not Allowed`);
-  }
-
-  const { id } = req.query;
-  const { amount } = req.body; // Next.js automatically parses JSON body
-
-  if (!id || isNaN(parseInt(id, 10))) {
-    return res.status(400).json({ error: 'A valid user ID must be provided.' });
-  }
-
-  if (!amount || typeof amount !== 'number' || amount <= 0) {
-    return res.status(400).json({ error: 'A valid, positive withdrawal amount must be provided.' });
-  }
-
-  const client = await db.pool.connect();
-
   try {
-    await client.query('BEGIN');
-
-    const { rows: userRows } = await client.query('SELECT coins FROM users WHERE id = $1 FOR UPDATE', [id]);
-
-    if (userRows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'User not found.' });
+    if (req.method !== 'POST') {
+      res.setHeader('Allow', ['POST']);
+      return res.status(405).end(`Method ${req.method} Not Allowed`);
     }
 
-    const currentCoins = userRows[0].coins;
+    const { id } = req.query;
+    const { amount } = req.body;
 
-    if (currentCoins < amount) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'Insufficient funds.', currentCoins });
+    if (!id || isNaN(parseInt(id, 10))) {
+      return res.status(400).json({ error: 'A valid user ID must be provided.' });
     }
 
-    const newCoins = currentCoins - amount;
-    await client.query('UPDATE users SET coins = $1 WHERE id = $2', [newCoins, id]);
+    if (!amount || typeof amount !== 'number' || amount <= 0) {
+      return res.status(400).json({ error: 'A valid, positive withdrawal amount must be provided.' });
+    }
 
-    await client.query('COMMIT');
+    const client = await db.pool.connect();
 
-    res.status(200).json({ success: true, message: 'Withdrawal successful.', newBalance: newCoins });
+    try {
+      await client.query('BEGIN');
 
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error(`Error during withdrawal for user ${id}:`, error);
-    res.status(500).json({ error: 'Internal Server Error' });
-  } finally {
-    client.release();
+      const { rows: userRows } = await client.query('SELECT coins FROM users WHERE id = $1 FOR UPDATE', [id]);
+
+      if (userRows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'User not found.' });
+      }
+
+      const currentCoins = userRows[0].coins;
+
+      if (currentCoins < amount) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Insufficient funds.', currentCoins });
+      }
+
+      const newCoins = currentCoins - amount;
+      await client.query('UPDATE users SET coins = $1 WHERE id = $2', [newCoins, id]);
+
+      await client.query('COMMIT');
+      res.status(200).json({ success: true, message: 'Withdrawal successful.', newBalance: newCoins });
+
+    } catch (txError) {
+      await client.query('ROLLBACK');
+      console.error(`Withdrawal Transaction Error for user ${id}:`, txError);
+      res.status(500).json({ error: 'Internal Server Error during transaction.' });
+    } finally {
+      client.release();
+    }
+  } catch (handlerError) {
+    console.error(`CRITICAL ERROR in /withdraw handler for user ${req.query.id}:`, handlerError);
+    res.status(500).json({ error: 'Internal Server Error. Please check the logs.' });
   }
 }
