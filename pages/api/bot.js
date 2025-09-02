@@ -5,27 +5,40 @@ import { db } from '../../lib/db.js';
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const groqApiKey = process.env.GROQ_API_KEY;
 
-// We instantiate the bot here, but we will not use its event listeners for the webhook.
-// We only use its API methods (e.g., bot.sendMessage).
 const bot = new TelegramBot(token);
-
-// A Map to store answers for active quizzes.
-const quizAnswers = new Map();
 
 // --- Helper Functions ---
 
-async function callAI(prompt, isJson = false) {
+async function callAIWithMemory(userId, prompt) {
   if (!groqApiKey) {
     console.error("FATAL: GROQ_API_KEY is not set.");
     return null;
   }
+
+  // 1. Fetch recent history for the user
+  const historyQuery = `
+    SELECT role, content FROM message_history
+    WHERE user_id = $1
+    ORDER BY created_at DESC
+    LIMIT 10;
+  `;
+  const { rows: historyRows } = await db.query(historyQuery, [userId]);
+
+  // The history is fetched in reverse, so we reverse it back to chronological order
+  const conversationHistory = historyRows.reverse();
+
+  const messages = conversationHistory.map(row => ({
+    role: row.role,
+    content: row.content
+  }));
+
+  // Add the new user prompt
+  messages.push({ role: "user", content: prompt });
+
   const body = {
     model: "openai/gpt-oss-20b",
-    messages: [{ role: "user", content: prompt }],
+    messages: messages,
   };
-  if (isJson) {
-    body.response_format = { type: "json_object" };
-  }
 
   try {
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -58,8 +71,7 @@ async function handleStart(msg) {
     `You currently have: **${coins} coins**.\n\n` +
     `**Commands:**\n` +
     `/daily - Claim your daily bonus.\n` +
-    `/chance - Try your luck (3 times a day).\n` +
-    `/quiz - Test your knowledge for coins.\n\n` +
+    `/chance - Try your luck (3 times a day).\n\n` +
     `**Withdrawals:**\n` +
     `To withdraw your coins, you must use the frontend application.\n\n` +
     `Simply chat with me to get AI responses and earn more coins!`;
@@ -114,74 +126,36 @@ async function handleChance(msg) {
     await bot.sendMessage(chatId, `✨ You won ${winnings} coins! Your new balance is ${newBalance}. You have ${2 - user.chance_today} chances left today.`);
 }
 
-async function handleQuiz(msg) {
-    const chatId = msg.chat.id;
-    await bot.sendMessage(chatId, "Generating a quiz question for you...");
-
-    const prompt = `Generate a short trivia question in English. Return ONLY a valid JSON object in the following format: { "question": "...", "options": ["A", "B", "C", "D"], "answer": "A" }`;
-    const response = await callAI(prompt, true);
-
-    if (!response) return bot.sendMessage(chatId, "Sorry, I couldn't create a quiz right now.");
-
-    try {
-        const quiz = JSON.parse(response);
-        const correctAnswerIndex = quiz.options.findIndex(opt => opt.startsWith(quiz.answer));
-        if (correctAnswerIndex === -1) throw new Error("AI returned invalid answer letter.");
-
-        const sentMessage = await bot.sendMessage(chatId, `❓ **${quiz.question}**`, {
-            parse_mode: 'Markdown',
-            reply_markup: {
-                inline_keyboard: [quiz.options.map((option, index) => ({ text: option, callback_data: `quiz_${index}` }))]
-            }
-        });
-        quizAnswers.set(sentMessage.message_id, correctAnswerIndex);
-        setTimeout(() => quizAnswers.delete(sentMessage.message_id), 5 * 60 * 1000); // 5 min timeout
-    } catch (error) {
-        console.error("Error parsing quiz response:", error);
-        await bot.sendMessage(chatId, "Sorry, I received a malformed quiz question. Please try again.");
-    }
-}
-
-async function handleCallbackQuery(callbackQuery) {
-    const msg = callbackQuery.message;
-    const data = callbackQuery.data;
-    const { id: telegramId } = callbackQuery.from;
-
-    if (data.startsWith('quiz_')) {
-        await bot.answerCallbackQuery(callbackQuery.id);
-        const selectedAnswerIndex = parseInt(data.split('_')[1], 10);
-        const correctAnswerIndex = quizAnswers.get(msg.message_id);
-
-        if (correctAnswerIndex === undefined) {
-            return bot.editMessageText("This quiz has expired or was already answered.", { chat_id: msg.chat.id, message_id: msg.message_id });
-        }
-        quizAnswers.delete(msg.message_id);
-
-        if (selectedAnswerIndex === correctAnswerIndex) {
-            const { rows } = await db.query('SELECT id, coins FROM users WHERE telegram_id = $1', [telegramId]);
-            if (rows.length === 0) {
-                return bot.editMessageText(`✅ Correct! To save your score and earn coins, please log in via the website first.`, { chat_id: msg.chat.id, message_id: msg.message_id });
-            }
-            const user = rows[0];
-            const newBalance = user.coins + 15;
-            await db.query('UPDATE users SET coins = $1 WHERE id = $2', [newBalance, user.id]);
-            await bot.editMessageText(`✅ Correct! You earned 15 coins. Your new balance is ${newBalance}.`, { chat_id: msg.chat.id, message_id: msg.message_id });
-        } else {
-            await bot.editMessageText(`❌ Wrong answer! You earned 0 coins.`, { chat_id: msg.chat.id, message_id: msg.message_id });
-        }
-    }
-}
-
 async function handleTextMessage(msg) {
     const chatId = msg.chat.id;
     const telegramId = msg.from.id;
-    const aiResponse = await callAI(`User asked: "${msg.text}"`);
+
+    // Check if user exists to get their database ID
+    const { rows: userRows } = await db.query('SELECT id, coins FROM users WHERE telegram_id = $1', [telegramId]);
+    if (userRows.length === 0) {
+        const aiResponse = await callAIWithMemory(null, msg.text); // Call without history
+        if (aiResponse) await bot.sendMessage(chatId, aiResponse);
+        return bot.sendMessage(chatId, "(You'll start earning coins and I'll remember our chat once you log in!)");
+    }
+    const user = userRows[0];
+    const userId = user.id;
+
+    // Get AI response using memory
+    const aiResponse = await callAIWithMemory(userId, msg.text);
+
     if (aiResponse) {
         await bot.sendMessage(chatId, aiResponse);
-        const { rows } = await db.query('UPDATE users SET coins = coins + 10 WHERE telegram_id = $1 RETURNING coins', [telegramId]);
-        if (rows.length === 0) {
-            await bot.sendMessage(chatId, "(You'll start earning coins for chatting once you log in!)");
-        }
+
+        // Save user message and AI response to history
+        const historySaveQuery = `
+            INSERT INTO message_history (user_id, role, content)
+            VALUES ($1, 'user', $2), ($1, 'assistant', $3);
+        `;
+        await db.query(historySaveQuery, [userId, msg.text, aiResponse]);
+
+        // Award coins
+        const newBalance = user.coins + 10;
+        await db.query('UPDATE users SET coins = $1 WHERE id = $2', [newBalance, userId]);
     } else {
         await bot.sendMessage(chatId, "Sorry, the AI is not available at the moment.");
     }
@@ -200,28 +174,25 @@ export default async function handler(req, res) {
     if (message) {
       const messageTimestamp = message.date;
       const currentTimestamp = Math.floor(Date.now() / 1000);
-      if (currentTimestamp - messageTimestamp > 300) { // 5 minutes
+      if (currentTimestamp - messageTimestamp > 300) {
         console.log("Ignoring stale update.");
         return res.status(200).send('OK');
       }
     }
 
-    // Route the update to the correct handler
     if (update.message?.text) {
       const text = update.message.text;
       if (text.startsWith('/start')) await handleStart(update.message);
       else if (text.startsWith('/daily')) await handleDaily(update.message);
       else if (text.startsWith('/chance')) await handleChance(update.message);
-      else if (text.startsWith('/quiz')) await handleQuiz(update.message);
       else await handleTextMessage(update.message);
     } else if (update.callback_query) {
-      await handleCallbackQuery(update.callback_query);
+      console.log(`Received unhandled callback_query: ${update.callback_query.data}`);
     }
 
     return res.status(200).send('OK');
   } catch (error) {
     console.error("Error in main handler:", error);
-    // We still send a 200 OK to Telegram to prevent it from resending the update.
     return res.status(200).send('OK');
   }
 }
