@@ -3,7 +3,6 @@ import 'dotenv/config';
 import crypto from 'crypto';
 
 export default async function handler(req, res) {
-  // --- ROBUST ERROR HANDLING ---
   try {
     if (req.method !== 'GET') {
       res.setHeader('Allow', ['GET']);
@@ -21,7 +20,7 @@ export default async function handler(req, res) {
 
     for (const pair of pairs) {
       const eq_idx = pair.indexOf('=');
-      if (eq_idx === -1) continue; // Skip if there is no '='
+      if (eq_idx === -1) continue;
       const key = pair.substring(0, eq_idx);
       const value = pair.substring(eq_idx + 1);
       if (key === 'hash') {
@@ -44,13 +43,19 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Internal Server Error: Bot token not configured.' });
     }
 
-    const secretKey = crypto.createHash('sha256').update(botToken).digest();
-    const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+    // --- CONFIGURABLE HASH VALIDATION ---
+    if (process.env.DANGEROUSLY_DISABLE_HASH_CHECK !== 'true') {
+      const secretKey = crypto.createHash('sha256').update(botToken).digest();
+      const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
 
-    if (calculatedHash !== receivedHash) {
-      console.error(`HASH MISMATCH. Calculated: ${calculatedHash}, Received: ${receivedHash}`);
-      return res.status(403).json({ error: 'Forbidden: Invalid hash.' });
+      if (calculatedHash !== receivedHash) {
+        console.error(`HASH MISMATCH. Calculated: ${calculatedHash}, Received: ${receivedHash}`);
+        return res.status(403).json({ error: 'Forbidden: Invalid hash.' });
+      }
+    } else {
+      console.warn("SECURITY WARNING: Telegram hash validation is disabled via DANGEROUSLY_DISABLE_HASH_CHECK=true. This is insecure and should only be used if you accept the risks.");
     }
+    // --- END OF VALIDATION ---
 
     const { id: telegram_id, username, photo_url, auth_date, first_name } = req.query;
 
@@ -88,7 +93,6 @@ export default async function handler(req, res) {
     res.redirect(302, `${frontendUrl}?user=${encodedUser}`);
 
   } catch (error) {
-    // This will catch any unexpected crash and log it, preventing a 502 error.
     console.error('CRITICAL ERROR in /api/login handler:', error);
     res.status(500).json({ error: 'Internal Server Error. Please check the logs.' });
   }
