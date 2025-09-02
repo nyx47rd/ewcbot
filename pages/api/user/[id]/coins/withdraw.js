@@ -1,9 +1,25 @@
 import { db } from '../../../../../lib/db.js';
 
+const setCorsHeaders = (res) => {
+  const frontendUrl = process.env.FRONTEND_URL;
+  if (frontendUrl) {
+    res.setHeader('Access-Control-Allow-Origin', frontendUrl);
+    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  }
+};
+
 export default async function handler(req, res) {
+  setCorsHeaders(res);
+
+  // Handle preflight OPTIONS request for CORS
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   try {
     if (req.method !== 'POST') {
-      res.setHeader('Allow', ['POST']);
+      res.setHeader('Allow', ['POST', 'OPTIONS']);
       return res.status(405).end(`Method ${req.method} Not Allowed`);
     }
 
@@ -22,7 +38,6 @@ export default async function handler(req, res) {
 
     try {
       await client.query('BEGIN');
-
       const { rows: userRows } = await client.query('SELECT coins FROM users WHERE id = $1 FOR UPDATE', [id]);
 
       if (userRows.length === 0) {
