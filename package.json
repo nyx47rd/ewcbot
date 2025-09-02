@@ -1,16 +1,16 @@
 {
-  "name": "telegram-coin-bot",
+  "name": "telegram-coin-bot-v2",
   "version": "1.0.0",
-  "description": "Telegram bot for earning coins",
-  "main": "api/index.js",
+  "description": "Telegram bot for earning coins (Node 22.x rewrite)",
+  "main": "api/bot.js",
   "type": "module",
   "scripts": {
-    "start": "node api/index.js"
+    "start": "node api/bot.js"
   },
   "dependencies": {
-    "dotenv": "^16.3.1",
-    "node-telegram-bot-api": "^0.64.0",
-    "pg": "^8.11.3"
+    "dotenv": "^16.4.5",
+    "node-telegram-bot-api": "^0.65.1",
+    "pg": "^8.11.5"
   },
   "engines": {
     "node": "22.x"

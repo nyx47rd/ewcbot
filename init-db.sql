@@ -40,11 +40,6 @@ $$;
 -- Add an index on telegram_id for faster lookups
 CREATE INDEX IF NOT EXISTS idx_telegram_id ON users(telegram_id);
 
--- Add a column to reset chance_today daily (or handle in application logic)
--- For simplicity, we will handle the reset logic in the application.
--- When a user invokes /chance, we'll check if last_chance_date is from a previous day.
--- If it is, we reset chance_today to 0 before proceeding.
-
 COMMENT ON COLUMN users.telegram_id IS 'Unique identifier from Telegram.';
 COMMENT ON COLUMN users.coins IS 'User''s coin balance.';
 COMMENT ON COLUMN users.last_daily_claim IS 'Timestamp of the last daily reward claim.';
