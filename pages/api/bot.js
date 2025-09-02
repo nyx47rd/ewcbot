@@ -205,6 +205,25 @@ export default async function handler(req, res) {
     return res.status(405).end(`Method ${req.method} Not Allowed`);
   }
 
+  // --- FIX: Stale Message Check ---
+  // Ignore messages that are older than a few minutes (e.g., 5 minutes)
+  // to prevent processing a backlog of stale updates after a downtime.
+  const update = req.body;
+  const message = update.message || update.callback_query?.message;
+
+  if (message) {
+    const messageTimestamp = message.date; // Unix timestamp in seconds
+    const currentTimestamp = Math.floor(Date.now() / 1000);
+    const fiveMinutes = 5 * 60;
+
+    if (currentTimestamp - messageTimestamp > fiveMinutes) {
+      console.log(`Ignoring stale update (timestamp: ${messageTimestamp}).`);
+      // Important: Still send a 200 OK to Telegram to clear the old update from the queue.
+      return res.status(200).send('OK');
+    }
+  }
+  // --- END OF FIX ---
+
   try {
     // Pass the request body to the bot instance for processing.
     bot.processUpdate(req.body);
