@@ -8,44 +8,46 @@ const token = process.env.TELEGRAM_BOT_TOKEN;
 import { db } from '../../lib/db.js';
 
 const bot = new TelegramBot(token);
-const openRouterKey = process.env.OPENROUTER_KEY;
+const groqApiKey = process.env.GROQ_API_KEY;
 
 const quizAnswers = new Map();
 
 // --- Helper Functions ---
 
-async function callOpenRouter(prompt, isJson = false) {
-  if (!openRouterKey) {
-    console.error("FATAL: OPENROUTER_KEY is not set.");
+async function callAI(prompt, isJson = false) {
+  if (!groqApiKey) {
+    console.error("FATAL: GROQ_API_KEY is not set.");
     return null;
   }
   const body = {
-    model: "openai/gpt-3.5-turbo",
+    model: "openai/gpt-oss-20b", // Using the model specified by the user
     messages: [{ role: "user", content: prompt }],
   };
   if (isJson) {
+      // Note: Not all models/APIs support JSON mode in the same way.
+      // We assume Groq's OpenAI-compatible endpoint supports this.
       body.response_format = { type: "json_object" };
   }
 
   try {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${openRouterKey}`,
+        'Authorization': `Bearer ${groqApiKey}`,
       },
       body: JSON.stringify(body),
     });
 
     if (!response.ok) {
       const errorBody = await response.text();
-      throw new Error(`OpenRouter API error: ${response.status} ${errorBody}`);
+      throw new Error(`Groq API error: ${response.status} ${errorBody}`);
     }
 
     const data = await response.json();
     return data.choices[0].message.content;
   } catch (error) {
-    console.error("Error calling OpenRouter:", error);
+    console.error("Error calling Groq API:", error);
     return null;
   }
 }
@@ -137,7 +139,7 @@ if (!bot.hasListeners) {
         const chatId = msg.chat.id;
         bot.sendMessage(chatId, "Generating a quiz...");
         const prompt = `Kullanıcıya 1 adet kısa bilgi sorusu üret. JSON formatında dön: { "question": "...", "options": ["A","B","C","D"], "answer": "A" }`;
-        const response = await callOpenRouter(prompt, true);
+        const response = await callAI(prompt, true);
         if (!response) return bot.sendMessage(chatId, "Could not create a quiz.");
         try {
             const quiz = JSON.parse(response);
@@ -186,7 +188,7 @@ if (!bot.hasListeners) {
         const chatId = msg.chat.id;
         const telegramId = msg.from.id;
         const userText = msg.text;
-        const aiResponse = await callOpenRouter(`User asked: "${userText}"`);
+        const aiResponse = await callAI(`User asked: "${userText}"`);
         if (aiResponse) {
             bot.sendMessage(chatId, aiResponse);
             await awardCoins(telegramId, 10, chatId);
@@ -204,6 +206,25 @@ export default async function handler(req, res) {
     res.setHeader('Allow', ['POST']);
     return res.status(405).end(`Method ${req.method} Not Allowed`);
   }
+
+  // --- FIX: Stale Message Check ---
+  // Ignore messages that are older than a few minutes (e.g., 5 minutes)
+  // to prevent processing a backlog of stale updates after a downtime.
+  const update = req.body;
+  const message = update.message || update.callback_query?.message;
+
+  if (message) {
+    const messageTimestamp = message.date; // Unix timestamp in seconds
+    const currentTimestamp = Math.floor(Date.now() / 1000);
+    const fiveMinutes = 5 * 60;
+
+    if (currentTimestamp - messageTimestamp > fiveMinutes) {
+      console.log(`Ignoring stale update (timestamp: ${messageTimestamp}).`);
+      // Important: Still send a 200 OK to Telegram to clear the old update from the queue.
+      return res.status(200).send('OK');
+    }
+  }
+  // --- END OF FIX ---
 
   try {
     // Pass the request body to the bot instance for processing.
