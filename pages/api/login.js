@@ -1,8 +1,8 @@
-import crypto from 'crypto';
 import { db } from '../../lib/db.js';
 import 'dotenv/config';
+import SHA256 from 'crypto-js/sha256.js';
+import HmacSHA256 from 'crypto-js/hmac-sha256.js';
 
-// In Next.js, the handler function is the default export.
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', ['GET']);
@@ -22,19 +22,23 @@ export default async function handler(req, res) {
   }
 
   try {
-    const secretKey = crypto.createHash('sha256').update(botToken).digest();
+    // --- HASH VALIDATION WITH crypto-js ---
+    const secretKey = SHA256(botToken);
+
     const dataCheckString = Object.keys(query)
       .filter(key => key !== 'hash')
       .sort()
       .map(key => `${key}=${query[key]}`)
       .join('\n');
 
-    const hmac = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+    const hmac = HmacSHA256(dataCheckString, secretKey);
+    const calculatedHash = hmac.toString(); // Defaults to hex
 
-    if (hmac !== query.hash) {
-      // This is the security check that fails if the token is wrong.
-      return res.status(403).json({ error: 'Forbidden: Invalid hash.' });
+    if (calculatedHash !== query.hash) {
+      console.error(`HASH MISMATCH with crypto-js. Calculated: ${calculatedHash}, Received: ${query.hash}`);
+      return res.status(403).json({ error: 'Forbidden: Invalid hash (crypto-js).' });
     }
+    // --- END OF HASH VALIDATION ---
 
     const { id: telegram_id, username, photo_url, auth_date, first_name } = query;
 
