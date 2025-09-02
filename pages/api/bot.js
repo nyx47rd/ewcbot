@@ -118,7 +118,7 @@ async function handleQuiz(msg) {
     const chatId = msg.chat.id;
     await bot.sendMessage(chatId, "Generating a quiz question for you...");
 
-    const prompt = `Kullanıcıya 1 adet kısa bilgi sorusu üret. JSON formatında dön: { "question": "...", "options": ["A","B","C","D"], "answer": "A" }`;
+    const prompt = `Generate a short trivia question in English. Return ONLY a valid JSON object in the following format: { "question": "...", "options": ["A", "B", "C", "D"], "answer": "A" }`;
     const response = await callAI(prompt, true);
 
     if (!response) return bot.sendMessage(chatId, "Sorry, I couldn't create a quiz right now.");
@@ -158,8 +158,13 @@ async function handleCallbackQuery(callbackQuery) {
         quizAnswers.delete(msg.message_id);
 
         if (selectedAnswerIndex === correctAnswerIndex) {
-            const { rows } = await db.query('UPDATE users SET coins = coins + 15 WHERE telegram_id = $1 RETURNING coins', [telegramId]);
-            const newBalance = rows.length > 0 ? rows[0].coins : '??';
+            const { rows } = await db.query('SELECT id, coins FROM users WHERE telegram_id = $1', [telegramId]);
+            if (rows.length === 0) {
+                return bot.editMessageText(`✅ Correct! To save your score and earn coins, please log in via the website first.`, { chat_id: msg.chat.id, message_id: msg.message_id });
+            }
+            const user = rows[0];
+            const newBalance = user.coins + 15;
+            await db.query('UPDATE users SET coins = $1 WHERE id = $2', [newBalance, user.id]);
             await bot.editMessageText(`✅ Correct! You earned 15 coins. Your new balance is ${newBalance}.`, { chat_id: msg.chat.id, message_id: msg.message_id });
         } else {
             await bot.editMessageText(`❌ Wrong answer! You earned 0 coins.`, { chat_id: msg.chat.id, message_id: msg.message_id });
