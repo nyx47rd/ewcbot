@@ -8,26 +8,32 @@ export default async function handler(req, res) {
     return res.status(405).end(`Method ${req.method} Not Allowed`);
   }
 
-  // --- NEW HASH VALIDATION (RAW VALUES) ---
-  // We use req.url to get the raw, encoded query string, as this might be
-  // how Telegram's servers build the hash string.
+  // --- FINAL HASH VALIDATION (TRUE RAW VALUES) ---
   const queryString = req.url.split('?')[1];
   if (!queryString) {
     return res.status(400).json({ error: 'Bad Request: Query string is empty.' });
   }
 
-  const params = new URLSearchParams(queryString);
-  const receivedHash = params.get('hash');
+  const pairs = queryString.split('&');
+  const dataCheckArr = [];
+  let receivedHash = '';
+
+  for (const pair of pairs) {
+    // Do not use .split('=') as value can contain '='. Find first '='.
+    const eq_idx = pair.indexOf('=');
+    const key = pair.substring(0, eq_idx);
+    const value = pair.substring(eq_idx + 1);
+
+    if (key === 'hash') {
+      receivedHash = value;
+    } else {
+      // Push the raw key=value pair. The value is still URL-encoded.
+      dataCheckArr.push(pair);
+    }
+  }
 
   if (!receivedHash) {
     return res.status(400).json({ error: 'Bad Request: No hash provided in query.' });
-  }
-
-  const dataCheckArr = [];
-  for (const [key, value] of params.entries()) {
-    if (key !== 'hash') {
-      dataCheckArr.push(`${key}=${value}`);
-    }
   }
 
   // Sort the array of "key=value" strings alphabetically.
@@ -44,9 +50,9 @@ export default async function handler(req, res) {
   const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
 
   if (calculatedHash !== receivedHash) {
-    console.error(`HASH MISMATCH (RAW). Calculated: ${calculatedHash}, Received: ${receivedHash}`);
-    console.error(`Data-check-string used: \n${dataCheckString}`);
-    return res.status(403).json({ error: 'Forbidden: Invalid hash (raw check failed).' });
+    console.error(`FINAL HASH MISMATCH. Calculated: ${calculatedHash}, Received: ${receivedHash}`);
+    console.error(`Final data-check-string used: \n${dataCheckString}`);
+    return res.status(403).json({ error: 'Forbidden: Invalid hash (final attempt failed).' });
   }
   // --- END OF HASH VALIDATION ---
 
