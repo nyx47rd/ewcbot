@@ -1,4 +1,4 @@
-import { db } from '../../../lib/db.js';
+import { db } from '../../../../lib/db.js'; // Adjusted path for Next.js structure
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
@@ -6,6 +6,7 @@ export default async function handler(req, res) {
     return res.status(405).end(`Method ${req.method} Not Allowed`);
   }
 
+  // In Next.js, dynamic route parameters are in req.query
   const { id } = req.query;
 
   if (!id || isNaN(parseInt(id, 10))) {

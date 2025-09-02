@@ -12,7 +12,6 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Create a function to update the updated_at timestamp
 CREATE OR REPLACE FUNCTION trigger_set_timestamp()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -21,7 +20,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Create a trigger to automatically update updated_at on row modification
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -37,11 +35,4 @@ BEGIN
 END;
 $$;
 
--- Add an index on telegram_id for faster lookups
 CREATE INDEX IF NOT EXISTS idx_telegram_id ON users(telegram_id);
-
-COMMENT ON COLUMN users.telegram_id IS 'Unique identifier from Telegram.';
-COMMENT ON COLUMN users.coins IS 'User''s coin balance.';
-COMMENT ON COLUMN users.last_daily_claim IS 'Timestamp of the last daily reward claim.';
-COMMENT ON COLUMN users.chance_today IS 'Counter for the daily chance game uses.';
-COMMENT ON COLUMN users.last_chance_date IS 'Timestamp of the last chance game use, to check for day reset.';
