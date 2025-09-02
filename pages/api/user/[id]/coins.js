@@ -1,12 +1,26 @@
-import { db } from '../../../../lib/db.js'; // Adjusted path for Next.js structure
+import { db } from '../../../../lib/db.js';
+
+const setCorsHeaders = (res) => {
+  const frontendUrl = process.env.FRONTEND_URL;
+  if (frontendUrl) {
+    res.setHeader('Access-Control-Allow-Origin', frontendUrl);
+    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  }
+};
 
 export default async function handler(req, res) {
+  setCorsHeaders(res);
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   if (req.method !== 'GET') {
-    res.setHeader('Allow', ['GET']);
+    res.setHeader('Allow', ['GET', 'OPTIONS']);
     return res.status(405).end(`Method ${req.method} Not Allowed`);
   }
 
-  // In Next.js, dynamic route parameters are in req.query
   const { id } = req.query;
 
   if (!id || isNaN(parseInt(id, 10))) {
